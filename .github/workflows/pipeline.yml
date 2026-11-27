@@ -4,15 +4,20 @@
 name: Java CI with Maven
 
 on:
-  push:
-    # branches: [ master ]
-  pull_request:
-    branches: [ master ]
+  workflow_dispatch:
+    inputs:
+      test-filter:
+        description: 'Surefire -Dtest selector; empty runs the full suite'
+        required: false
+        default: ''
 
 jobs:
   # old-school build and jar method. No tests run or compiled.
-  build-1_6: 
+  build-1_6:
+    # JDK 6 is no longer downloadable via actions/setup-java (Azul removed zulu 6)
+    if: false
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     strategy:
       matrix:
         # build for java 1.6, however don't run any tests
@@ -32,13 +37,14 @@ jobs:
         run: |
           jar cvf target/org.json.jar -C target/classes .
       - name: Upload Java ${{ matrix.java }} JAR
-        uses: actions/upload-artifact@v1
+        uses: actions/upload-artifact@v4
         with:
           name: Java ${{ matrix.java }} JAR
           path: target/org.json.jar
       
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 40
     strategy:
       matrix:
         # build against supported Java LTS versions:
@@ -50,11 +56,31 @@ jobs:
         uses: actions/setup-java@v1
         with:
           java-version: ${{ matrix.java }}
+      - name: Cache Maven repository
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository
+          key: ${{ runner.os }}-maven-${{ matrix.java }}-${{ hashFiles('pom.xml') }}
       - name: Compile Java ${{ matrix.java }}
         run: mvn clean compile -Dmaven.compiler.source=${{ matrix.java }} -Dmaven.compiler.target=${{ matrix.java }} -Dmaven.test.skip=true -Dmaven.site.skip=true -Dmaven.javadoc.skip=true
       - name: Run Tests ${{ matrix.java }}
         run: |
-          mvn test -Dmaven.compiler.source=${{ matrix.java }} -Dmaven.compiler.target=${{ matrix.java }}
+          if [ -n "${{ inputs.test-filter }}" ]; then
+            mvn test -Dmaven.compiler.source=${{ matrix.java }} -Dmaven.compiler.target=${{ matrix.java }} -Dtest=${{ inputs.test-filter }} -DfailIfNoTests=false -Dsurefire.failIfNoSpecifiedTests=false
+          else
+            mvn test -Dmaven.compiler.source=${{ matrix.java }} -Dmaven.compiler.target=${{ matrix.java }}
+          fi
+      - name: Package JAR ${{ matrix.java }}
+        if: ${{ matrix.java == 8 }}
+        run: |
+          mvn package -DskipTests -Dmaven.javadoc.skip=true -Dmaven.compiler.source=${{ matrix.java }} -Dmaven.compiler.target=${{ matrix.java }}
+      - name: Upload JAR ${{ matrix.java }}
+        if: ${{ matrix.java == 8 }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: Maven JAR ${{ matrix.java }}
+          path: target/json-*.jar
+          if-no-files-found: error
       - name: Build Test Report ${{ matrix.java }}
         if: ${{ always() }}
         run: |
@@ -62,13 +88,13 @@ jobs:
           mvn site -DgenerateReports=false -Dmaven.compiler.source=${{ matrix.java }} -Dmaven.compiler.target=${{ matrix.java }}
       - name: Upload Test Results ${{ matrix.java }}
         if: ${{ always() }}
-        uses: actions/upload-artifact@v1
+        uses: actions/upload-artifact@v4
         with:
           name: Test Results ${{ matrix.java }}
           path: target/surefire-reports/
       - name: Upload Test Report ${{ matrix.java }}
         if: ${{ always() }}
-        uses: actions/upload-artifact@v1
+        uses: actions/upload-artifact@v4
         with:
           name: Test Report ${{ matrix.java }}
           path: target/site/
